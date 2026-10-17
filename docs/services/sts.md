@@ -13,6 +13,21 @@
 | `GetSessionToken` | Get temporary credentials for an IAM user |
 | `GetFederationToken` | Get temporary credentials for a federated user |
 | `DecodeAuthorizationMessage` | Decode an encoded authorization failure message |
+| `GetDelegatedAccessToken` | Exchange a delegation request's trade-in token for temporary credentials |
+
+## Delegated Access Token
+
+`GetDelegatedAccessToken` takes the exchange token an IAM delegation request released and answers
+credentials in the customer's account, acting as the identity that claimed the request, which is
+the `AssumedPrincipal` it returns. The credentials expire at the moment the customer released the
+token plus the request's `SessionDuration`, not at the exchange, so the same token can be
+exchanged repeatedly and every session it mints ends at the same time.
+
+Only the account that filed the delegation request may exchange its token; any other account gets
+`AccessDenied`. A token past its window, and a token nothing matches, both answer
+`ExpiredTradeInTokenException`. `PackedPolicySize` is not returned, the model deprecating it and
+stating it is not populated for this operation. See the delegation request section of the
+[IAM service doc](iam.md) for the lifecycle that issues the token.
 
 ## Configuration
 

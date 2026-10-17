@@ -1072,14 +1072,17 @@ approval page of its own: the customer side of the workflow is the API.
 | AcceptDelegationRequest | Approves a claimed request, recording the approver. |
 | RejectDelegationRequest | Refuses a request, keeping the explanation as `RejectionReason`. |
 | UpdateDelegationRequest | Adds notes and forwards the request for administrator approval. |
+| SendDelegationToken | Releases the exchange token on an accepted request, finalizing it. |
 | GetDelegationRequest | Returns one request, with an optional permission check. |
 | ListDelegationRequests | Lists the requests the calling account owns. |
 
 A request moves through the states AWS publishes: `UNASSIGNED`, `ASSIGNED`, `PENDING_APPROVAL`,
 `ACCEPTED`, `FINALIZED`, `REJECTED` and `EXPIRED`. A new request is `UNASSIGNED` whether or not it
 names a target account, claiming it makes it `ASSIGNED`, an update forwards it to
-`PENDING_APPROVAL`, and acceptance from either state makes it `ACCEPTED`. A rejected request cannot
-be accepted or updated afterwards.
+`PENDING_APPROVAL`, and acceptance from either state makes it `ACCEPTED`. Releasing the token moves
+an accepted request to `FINALIZED`, which the reference says cannot be rolled back, so it is the
+one transition that cannot be repeated. A rejected request cannot be accepted or updated
+afterwards.
 
 Expiry follows the two windows AWS documents, and is applied when a request is next read rather than
 by a sweeper: a day for an unclaimed request, a week for every other state, including the terminal
@@ -1107,9 +1110,24 @@ and `AcceptDelegationRequest` models only `NoSuchEntity`, `ServiceFailure` and
 `ConcurrentModification`, so the conflict is the closest of the three. The same lock serializes
 those transitions, so two callers claiming one request leave a single owner.
 
-Four things are deliberately not modeled. `SendDelegationToken` and STS `GetDelegatedAccessToken`
-are not dispatched yet, so no request reaches `FINALIZED`. IAM publishes no SNS notification for a
-state change, so `NotificationChannel` is validated and stored but nothing reads it.
+The exchange token is the other half. `SendDelegationToken` releases it, and STS
+`GetDelegatedAccessToken` exchanges it for credentials in the customer's account, acting as the
+identity that claimed the request. The release is the one call on this family decided per identity
+rather than per account: `OnlySendByOwner` holds it to whoever claimed the request, so a request
+forwarded to an administrator who accepted it answers `AccessDenied` when that administrator tries
+to release it, which is what the flag is for. The delegation period starts at the release rather than at the
+exchange, so every exchange of one token answers the same expiry, release plus `SessionDuration`,
+and exchanging late simply buys a shorter session. Only the account that filed the request may
+exchange its token. A token past that window, and one nothing matches, both answer
+`ExpiredTradeInTokenException`: the operation models three errors and none of them says "no such
+token", and the remedy the reference gives, requesting a new token, is the same either way. A
+token offered by any other account answers `AccessDenied`, which is a refusal rather than an
+expiry. `PackedPolicySize` is left out of the response, the model deprecating it and stating it is
+not populated here.
+
+Three things are deliberately not modeled. IAM publishes the exchange token only in an SNS
+notification, and Floci sends none yet, so the token is minted onto the request and no operation
+hands it back: `NotificationChannel` is validated and stored with nothing reading it.
 `GetHumanReadableSummary` is undispatched, its summary being LLM-generated on AWS.
 `PermissionCheckResult` answers `UNSURE` when `DelegationPermissionCheck` is asked for, which the
 enum models, because a delegation request carries no permission for Floci to evaluate. Policy

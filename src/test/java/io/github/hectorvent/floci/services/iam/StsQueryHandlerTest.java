@@ -6,6 +6,7 @@ import io.github.hectorvent.floci.core.common.OidcIssuerKeyLookup;
 import io.github.hectorvent.floci.core.common.RegionResolver;
 import io.github.hectorvent.floci.core.common.WebIdentityToken;
 import io.github.hectorvent.floci.core.common.WebIdentityTokenVerifier;
+import io.github.hectorvent.floci.services.iam.model.DelegationRequest;
 import io.github.hectorvent.floci.services.iam.model.IamRole;
 import io.github.hectorvent.floci.testing.PartitionMatrix;
 import io.github.hectorvent.floci.testing.PartitionMatrix.PartitionCase;
@@ -81,6 +82,11 @@ class StsQueryHandlerTest {
     }
 
     private static StsQueryHandler newHandler(IamService iamService, RegionResolver regionResolver, Clock clock) {
+        return newHandler(iamService, regionResolver, clock, mock(DelegationRequestService.class));
+    }
+
+    private static StsQueryHandler newHandler(IamService iamService, RegionResolver regionResolver,
+                                              Clock clock, DelegationRequestService delegation) {
         EmulatorConfig config = mock(EmulatorConfig.class);
         EmulatorConfig.ServicesConfig services = mock(EmulatorConfig.ServicesConfig.class);
         EmulatorConfig.IamServiceConfig iam = mock(EmulatorConfig.IamServiceConfig.class);
@@ -99,6 +105,7 @@ class StsQueryHandlerTest {
                 mock(OidcIssuerKeyLookup.class),
                 mock(SAMLProviderService.class),
                 mock(SAMLTrustPolicyEvaluator.class),
+                delegation,
                 clock);
     }
 
@@ -556,7 +563,8 @@ class StsQueryHandlerTest {
 
         StsQueryHandler handler = new StsQueryHandler(iamService, mock(AccountResolver.class),
                 new RegionResolver(REGION, "000000000000"), config, mock(AssumeRolePolicyEvaluator.class),
-                trust, verifier, keys, mock(SAMLProviderService.class), mock(SAMLTrustPolicyEvaluator.class));
+                trust, verifier, keys, mock(SAMLProviderService.class), mock(SAMLTrustPolicyEvaluator.class),
+                mock(DelegationRequestService.class));
         MultivaluedMap<String, String> params = new MultivaluedHashMap<>();
         params.putSingle("RoleArn", requestedRoleArn);
         params.putSingle("RoleSessionName", "app");
@@ -646,5 +654,35 @@ class StsQueryHandlerTest {
         Matcher matcher = pattern.matcher(body);
         assertTrue(matcher.find(), "expected " + pattern + " in " + body);
         return matcher.group(1);
+    }
+
+    /**
+     * The delegated session is the customer's grant, so it is registered in the customer's
+     * account and with no issuing key. A partner key that happened to name an IAM user would
+     * otherwise become the session's issuer and bound it to that user's own permissions, which is
+     * the opposite of what the delegation gave away.
+     */
+    @Test
+    void theDelegatedSessionBelongsToTheCustomerAndHasNoIssuingKey() {
+        DelegationRequest request = new DelegationRequest();
+        request.setDelegationRequestId("dr-0123456789abcdef01234567");
+        request.setOwnerAccountId("000000000002");
+        request.setOwnerId("arn:aws:iam::000000000002:user/admin");
+        Instant expiry = Instant.parse("2026-01-01T02:00:00Z");
+        IamService iamService = mock(IamService.class);
+        DelegationRequestService delegation = mock(DelegationRequestService.class);
+        when(delegation.redeem("000000000001", "token-1"))
+                .thenReturn(new DelegationRequestService.Redeemed(request, expiry));
+        StsQueryHandler handler = newHandler(iamService, new RegionResolver(REGION, "000000000001"),
+                Clock.systemUTC(), delegation);
+
+        MultivaluedMap<String, String> params = new MultivaluedHashMap<>();
+        params.putSingle("TradeInToken", "token-1");
+        Response response = handler.handle("GetDelegatedAccessToken", params);
+
+        assertEquals(200, response.getStatus(), (String) response.getEntity());
+        verify(iamService).registerIssuedSession(anyString(), anyString(), anyString(),
+                eq("arn:aws:iam::000000000002:user/admin"), eq(expiry), isNull(),
+                eq("000000000002"), isNull());
     }
 }
