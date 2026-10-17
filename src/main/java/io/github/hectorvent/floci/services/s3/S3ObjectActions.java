@@ -1,6 +1,7 @@
 package io.github.hectorvent.floci.services.s3;
 
 import io.github.hectorvent.floci.core.common.IamConditionContextResolver;
+import io.github.hectorvent.floci.core.common.XmlParser;
 import org.jboss.logging.Logger;
 
 import java.net.URLDecoder;
@@ -156,6 +157,36 @@ public final class S3ObjectActions {
             conditions.put(IamConditionContextResolver.REQUEST_OBJECT_TAG_KEYS, new ArrayList<>(requestedKeys));
         }
         return conditions.isEmpty() ? null : conditions;
+    }
+
+    /**
+     * {@code s3:RequestObjectTag/<key>} and {@code s3:RequestObjectTagKeys} from the {@code <Tagging>}
+     * XML body of a PutObjectTagging. Null when it names no tag.
+     */
+    public static Map<String, List<String>> taggingBodyConditions(String body) {
+        if (body == null || body.isEmpty()) {
+            return null;
+        }
+        Map<String, String> tags = XmlParser.extractPairs(body, "Tag", "Key", "Value");
+        if (tags.isEmpty()) {
+            return null;
+        }
+        Map<String, List<String>> conditions = new LinkedHashMap<>();
+        tags.forEach((name, value) -> conditions.put(
+                IamConditionContextResolver.REQUEST_OBJECT_TAG_PREFIX + name, List.of(value)));
+        conditions.put(IamConditionContextResolver.REQUEST_OBJECT_TAG_KEYS, new ArrayList<>(tags.keySet()));
+        return conditions;
+    }
+
+    /** The Object Lock keys a PutObjectRetention's {@code <Retention>} body sets (see {@link #objectLockConditions}). */
+    public static Map<String, List<String>> retentionBodyConditions(String body, Instant now) {
+        return objectLockConditions(XmlParser.extractFirst(body, "Mode", null),
+                XmlParser.extractFirst(body, "RetainUntilDate", null), null, now);
+    }
+
+    /** The Object Lock key a PutObjectLegalHold's {@code <LegalHold>} body sets (see {@link #objectLockConditions}). */
+    public static Map<String, List<String>> legalHoldBodyConditions(String body, Instant now) {
+        return objectLockConditions(null, null, XmlParser.extractFirst(body, "Status", null), now);
     }
 
     /**

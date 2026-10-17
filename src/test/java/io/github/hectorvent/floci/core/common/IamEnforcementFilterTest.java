@@ -2058,6 +2058,8 @@ class IamEnforcementFilterTest {
                 .thenReturn(IamPolicyEvaluator.Decision.ALLOW);
         when(evaluator.evaluateResolvedResourcePolicy(any(), any(), any(), eq(deniedAction), any(), any()))
                 .thenReturn(IamPolicyEvaluator.Decision.DENY);
+        // A bypass header counts only on a request that overrides a governance lock.
+        when(conditionContextResolver.s3OverridesGovernanceRetention(any(), any())).thenReturn(true);
         CloudTrailService cloudTrail = mock(CloudTrailService.class);
 
         newFilter(mock(CurrentVertxRequest.class), cloudTrail).filter(containerRequest);

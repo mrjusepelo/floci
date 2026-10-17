@@ -565,11 +565,15 @@ public class IamEnforcementFilter implements ContainerRequestFilter {
                         withoutObjectTags(targetContexts), region, accountId, akid)) {
             return;
         }
-        // Asking to bypass governance-mode retention on a retention change or a delete takes
-        // s3:BypassGovernanceRetention as well, as the API reference says for both. The user guide
-        // says the permission does not apply to annotation operations.
+        // A retention change or a delete that overrides governance-mode retention takes
+        // s3:BypassGovernanceRetention as well. The user guide's permissions table requires it "if you
+        // want to delete an object that's protected by governance mode" and to "bypass the governance
+        // mode of an Object Lock retention configuration", so the header on a request that overrides
+        // no lock asks for nothing more. The user guide says the permission does not apply to
+        // annotation operations.
         if (GOVERNANCE_BYPASS_ACTIONS.contains(action)
                 && "true".equalsIgnoreCase(ctx.getHeaderString("x-amz-bypass-governance-retention"))
+                && conditionContextResolver.s3OverridesGovernanceRetention(action, ctx)
                 && abortIfDenied(ctx, caller, principal, "s3:BypassGovernanceRetention", action, credentialScope,
                         resources, targetContexts, region, accountId, akid)) {
             return;
